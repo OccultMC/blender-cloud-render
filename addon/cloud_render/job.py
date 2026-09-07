@@ -562,11 +562,15 @@ class CloudJob:
                         w.state = "done"
                     continue
                 actual = (inst.get("actual_status") or "").lower()
+                intended = (inst.get("intended_status") or "").lower()
+                cur_state = (inst.get("cur_state") or "").lower()
                 msg = (inst.get("status_msg") or "")[:160]
-                if actual in DEAD_INSTANCE_STATES:
+                # Vast marks a host that failed to build/start the container as
+                # intended/cur_state "stopped" while actual_status stays "loading".
+                if actual in DEAD_INSTANCE_STATES or intended == "stopped" or cur_state == "stopped":
                     if w.remaining:
                         w.state = "dead"
-                        w.error = f"instance {actual}: {msg}"
+                        w.error = f"instance {actual}/{intended}: {msg}"
                         self.log(f"worker {w.index}: instance {w.instance_id} {actual} - {msg}")
                     else:
                         w.state = "done"
