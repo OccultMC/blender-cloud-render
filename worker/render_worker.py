@@ -370,7 +370,7 @@ def run_render(manifest: dict, frames: list[int], status: Status, uploader: Uplo
         m = SAVED_RE.search(line)
         if m:
             p = Path(m.group(1))
-            log(line)
+            print(line, flush=True)  # already in the log file via the raw write above
             if p.exists() and p not in seen_saved:
                 seen_saved.add(p)
                 frame_no = status.data.get("current_frame")
@@ -382,7 +382,7 @@ def run_render(manifest: dict, frames: list[int], status: Status, uploader: Uplo
         if m:
             status.update(device_used=m.group(1))
         if line.startswith("[gpu_setup]") or "Error" in line or "error" in line[:40] or line.startswith("Blender "):
-            log(line)
+            print(line, flush=True)
     rc = proc.wait()
     log(f"blender exited with code {rc}")
 

@@ -1,0 +1,59 @@
+[cloud_render] packing: packing textures, libraries and caches into the bundle05:14:48
+ packing | packing textures, libraries and caches into the bundle | 0/4 | w0:pending:None
+[cloud_render] packing: "D:/Program Files/Blender Foundation/Blender 5.2/blender.exe" -b D:\GeoAxis\BlenderCloudRender\tests\_out\scene_test.e2e_tmp.blend ...
+[cloud_render] [pack_blend] saved working copy to D:\GeoAxis\BlenderCloudRender\tests\_out\jobs\e2e-20260908-051448\bundle\scene_test.blend
+[cloud_render] [pack_blend] packed=0 copied=0 missing=0 warnings=0 errors=0
+[cloud_render] bundle zipped: 0.1 MB -> bundle.zip
+[cloud_render] uploading: uploading bundle (0.1 MB) to R2
+[cloud_render] upload 18%
+[cloud_render] upload 35%
+[cloud_render] upload 53%
+[cloud_render] upload 71%
+[cloud_render] upload 88%
+[cloud_render] upload 100%
+[cloud_render] upload 100%
+[cloud_render] provisioning: searching Vast.ai for 1 cheapest RTX workers
+[cloud_render] image pinned to sha256:8f3273a23b0e...
+05:14:53 provisioning | searching Vast.ai for 1 cheapest RTX workers | 0/4 | w0:pending:None
+[cloud_render] worker 0: instance 50193158 on RTX 3060 @ $0.049/h (South Korea, KR, driver 580.159.03) frames 1-4
+[cloud_render] rendering: 1 workers starting (image pull + Blender download takes a few minutes)
+05:14:58 rendering | 1 workers starting (image pull + Blender download takes a few minutes) | 0/4 | w0:loading:None
+05:15:03 rendering | 0/4 frames rendered, 1 workers active | 0/4 | w0:loading:None
+05:17:28 rendering | 0/4 frames rendered, 1 workers active | 0/4 | w0:starting:None
+[cloud_render] downloaded 4 file(s) -> D:\GeoAxis\BlenderCloudRender\tests\_out\e2e_frames
+[cloud_render] finishing: all frames rendered - downloading and shutting down workers
+05:17:38 finishing | all frames rendered - downloading and shutting down workers | 4/4 | w0:done:None
+[cloud_render] all workers already gone
+[cloud_render] done: 4 frames rendered, est. cost $0.00
+
+FINAL: done - 4 frames rendered, est. cost $0.00
+error: 
+cost/h: 0.04888888888888889 est cost: 0.0022
+  worker 0: state=done instance=50193158 gpu=RTX 3060 $0.04888888888888889/h device=None frames_done=[1, 2, 3, 4] err=
+downloaded frames: ['shot_0001.png', 'shot_0002.png', 'shot_0003.png', 'shot_0004.png']
+instances still alive for this job: []
+log tail:
+  05:14:48 packing: packing textures, libraries and caches into the bundle
+  05:14:48 packing: "D:/Program Files/Blender Foundation/Blender 5.2/blender.exe" -b D:\GeoAxis\BlenderCloudRender\tests\_out\scene_test.e2e_tmp.blend ...
+  05:14:49 [pack_blend] saved working copy to D:\GeoAxis\BlenderCloudRender\tests\_out\jobs\e2e-20260908-051448\bundle\scene_test.blend
+  05:14:49 [pack_blend] packed=0 copied=0 missing=0 warnings=0 errors=0
+  05:14:49 bundle zipped: 0.1 MB -> bundle.zip
+  05:14:49 uploading: uploading bundle (0.1 MB) to R2
+  05:14:49 upload 18%
+  05:14:49 upload 35%
+  05:14:49 upload 53%
+  05:14:49 upload 71%
+  05:14:49 upload 88%
+  05:14:49 upload 100%
+  05:14:50 upload 100%
+  05:14:51 provisioning: searching Vast.ai for 1 cheapest RTX workers
+  05:14:52 image pinned to sha256:8f3273a23b0e...
+  05:14:56 worker 0: instance 50193158 on RTX 3060 @ $0.049/h (South Korea, KR, driver 580.159.03) frames 1-4
+  05:14:57 rendering: 1 workers starting (image pull + Blender download takes a few minutes)
+  05:17:37 downloaded 4 file(s) -> D:\GeoAxis\BlenderCloudRender\tests\_out\e2e_frames
+  05:17:37 finishing: all frames rendered - downloading and shutting down workers
+  05:17:38 all workers already gone
+  05:17:38 done: 4 frames rendered, est. cost $0.00
+
+E2E PASS
+exit=0

@@ -138,7 +138,7 @@ class CLOUDRENDER_PT_job(CloudRenderPanelMixin, Panel):
         else:
             layout.progress(factor=snap.get("progress", 0.0), type="BAR", text=f"{done}/{total} frames")
         if snap.get("cost_per_hour") or snap.get("cost_so_far"):
-            layout.label(text=f"${snap.get('cost_per_hour', 0):.3f}/hour  -  est. ${snap.get('cost_so_far', 0):.2f} so far",
+            layout.label(text=f"${snap.get('cost_per_hour', 0):.3f}/hour  -  est. ${snap.get('cost_so_far', 0):.3f} so far",
                          icon="FUND")
         if snap.get("frames_downloaded"):
             layout.label(text=f"{snap['frames_downloaded']} files downloaded to {snap.get('output_dir', '')}"[:110],

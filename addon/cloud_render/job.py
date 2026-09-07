@@ -510,8 +510,10 @@ class CloudJob:
 
     def _poll_worker_status(self) -> None:
         for w in self.workers:
-            if w.state in ("done", "pending", "dead", "failed") or w.instance_id is None:
+            if w.state in ("pending", "dead", "failed") or w.instance_id is None:
                 continue
+            if w.state == "done" and w.device_used is not None:
+                continue  # final status already captured
             st = self.r2.get_json(f"{self.prefix}/status/worker_{w.index}.json")
             if not st:
                 continue
@@ -538,6 +540,8 @@ class CloudJob:
                         w.error = "worker finished but frames are missing in R2"
                     else:
                         w.state = "done"
+                elif w.state == "done":
+                    pass  # all frames already in R2 (set by _poll_frames); keep it
                 elif state in ("starting", "downloading", "rendering", "uploading"):
                     w.state = state
 
@@ -645,7 +649,7 @@ class CloudJob:
                 pass
         with self.lock:
             self.finished_at = _now()
-        self.set_status("done", f"{self.frames_total} frames rendered, est. cost ${self.cost_so_far():.2f}")
+        self.set_status("done", f"{self.frames_total} frames rendered, est. cost ${self.cost_so_far():.3f}")
 
     def _teardown(self, status: str, message: str) -> None:
         try:
