@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.zip
+*.blend1
+.env
+tests/_out/
+dist/

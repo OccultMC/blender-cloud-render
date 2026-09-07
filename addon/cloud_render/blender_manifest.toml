@@ -1,0 +1,20 @@
+schema_version = "1.0.0"
+
+id = "cloud_render"
+version = "1.0.0"
+name = "Cloud Render"
+tagline = "Render Cycles animations on Vast.ai RTX workers via R2"
+maintainer = "OccultMC <occultemmcee@gmail.com>"
+type = "add-on"
+website = "https://github.com/OccultMC/blender-cloud-render"
+tags = ["Render", "Pipeline"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 OccultMC"]
+
+[permissions]
+network = "Rent Vast.ai GPU workers and move bundles and frames via R2"
+files = "Pack the scene bundle and write frames to the output folder"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "/.git/", "/*.zip"]

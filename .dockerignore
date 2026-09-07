@@ -1,0 +1,7 @@
+addon/
+scripts/
+tests/
+.github/
+*.zip
+*.md
+.git/

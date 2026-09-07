@@ -1,0 +1,65 @@
+name: Build worker image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "worker/**"
+      - ".github/workflows/build-image.yml"
+  workflow_dispatch:
+    inputs:
+      blender_version:
+        description: "Blender version to bake into the image (x.y.z)"
+        required: false
+        default: "5.2.1"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BLENDER_VERSION=${{ github.event.inputs.blender_version || '5.2.1' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (blender + worker imports)
+        run: |
+          docker run --rm --entrypoint /opt/blender/current/blender "${IMAGE}:latest" --version
+          docker run --rm --entrypoint python3 "${IMAGE}:latest" -c "import boto3, ast; ast.parse(open('/opt/worker/render_worker.py').read()); print('worker ok')"
