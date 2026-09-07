@@ -114,10 +114,10 @@ differs, so files always open in the release they were saved from.
 `libnvoptix.so.1` with the `graphics` capability.
 
 The GitHub Actions workflow builds and pushes the image on every push to `main`
-that touches `Dockerfile` or `worker/`. A package published by Actions starts
-**private**; make it public once at
-<https://github.com/users/OccultMC/packages/container/blender-cloud-render/settings>
-or set a GHCR token in the add-on preferences.
+that touches `Dockerfile` or `worker/`. The package inherited the repo's public
+visibility, so Vast hosts pull it anonymously. If it is ever made private, set a
+GHCR token (read:packages) in the add-on preferences and the add-on passes
+`-u user -p token ghcr.io` to Vast as `image_login`.
 
 ## Tests
 

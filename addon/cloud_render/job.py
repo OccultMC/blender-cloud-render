@@ -68,7 +68,7 @@ class JobConfig:
     max_retries: int = 2
     poll_interval: float = 10.0
     stale_minutes: float = 20.0
-    loading_timeout_minutes: float = 15.0
+    loading_timeout_minutes: float = 20.0
     keep_bundle_in_r2: bool = False
     device: str = "OPTIX"
 
@@ -675,8 +675,6 @@ class CloudJob:
             self.log(f"WARNING: instances still alive after destroy attempts: {remaining} - check the Vast console")
         else:
             self.log("all instances confirmed destroyed")
-        with self.lock:
-            self.cost_per_hour = 0.0
 
     def _cleanup_local(self) -> None:
         for p in (self.cfg.tmp_blend, os.path.join(self.cfg.job_dir, "bundle.zip")):

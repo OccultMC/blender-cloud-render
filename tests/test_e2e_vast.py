@@ -57,7 +57,7 @@ cfg = jobmod.JobConfig(
     vast_key=vast_key, r2_account=env["R2_ACCOUNT_ID"], r2_access_key=env["R2_ACCESS_KEY_ID"],
     r2_secret_key=env["R2_SECRET_ACCESS_KEY"], r2_bucket=env["R2_BUCKET_NAME"], r2_endpoint="", r2_prefix="blender-cloud-render",
     series=["20", "30", "40", "50"], min_vram_gb=8, disk_gb=30, max_dph=args.max_dph, min_reliability=0.95, min_inet_down=200,
-    auto_download=True, auto_destroy=True, max_retries=1, poll_interval=10.0, stale_minutes=10, loading_timeout_minutes=12,
+    auto_download=True, auto_destroy=True, max_retries=1, poll_interval=10.0, stale_minutes=10, loading_timeout_minutes=15,
 )
 job = jobmod.CloudJob(cfg)
 job.start()
