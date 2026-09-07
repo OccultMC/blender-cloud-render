@@ -150,6 +150,67 @@ except Exception:
     traceback.print_exc()
     FAILS.append("pack test crashed")
 
+# --------------------------------------------------------------------------- pack: linked library + image sequence
+try:
+    lib_dir = os.path.join(OUT, "libs")
+    os.makedirs(lib_dir, exist_ok=True)
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.mesh.primitive_ico_sphere_add()
+    bpy.context.active_object.name = "LibSphere"
+    lib_path = os.path.join(lib_dir, "lib.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=lib_path)
+
+    seq_dir = os.path.join(OUT, "seq")
+    os.makedirs(seq_dir, exist_ok=True)
+    for n in range(1, 4):
+        im = bpy.data.images.new("f", 8, 8)
+        im.filepath_raw = os.path.join(seq_dir, f"plate_{n:03d}.png")
+        im.file_format = "PNG"
+        im.save()
+        bpy.data.images.remove(im)
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    with bpy.data.libraries.load(lib_path, link=True) as (src, dst):
+        dst.objects = ["LibSphere"]
+    for ob in dst.objects:
+        scene.collection.objects.link(ob)
+    seq = bpy.data.images.load(os.path.join(seq_dir, "plate_001.png"))
+    seq.source = "SEQUENCE"
+    mat = bpy.data.materials.new("seqmat")
+    mat.use_nodes = True
+    node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+    node.image = seq
+    node.image_user.frame_duration = 3
+    bpy.ops.mesh.primitive_plane_add()
+    bpy.context.active_object.data.materials.append(mat)
+    blend2 = os.path.join(OUT, "scene_linked.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=blend2)
+
+    tmp2 = packer.snapshot_session(blend2)
+    bundle2 = os.path.join(OUT, "bundle2")
+    logs = []
+    manifest2, report2 = packer.run_pack(bpy.app.binary_path, tmp2, bundle2, "scene_linked", os.path.dirname(blend2), logs.append)
+    print("\n".join(logs))
+    ext_dir = os.path.join(bundle2, "_ext")
+    seq_dirs = [d for d in os.listdir(ext_dir) if d.startswith("seq_")] if os.path.isdir(ext_dir) else []
+    check(len(seq_dirs) == 1 and len(os.listdir(os.path.join(ext_dir, seq_dirs[0]))) == 3,
+          f"image sequence copied into _ext ({seq_dirs})")
+    check(not report2.get("missing") and not report2.get("errors"), f"linked scene: no missing/errors {report2.get('missing')} {report2.get('errors')}")
+    bpy.ops.wm.open_mainfile(filepath=os.path.join(bundle2, "scene_linked.blend"))
+    libs = list(bpy.data.libraries)
+    check(libs and all(l.packed_file is not None for l in libs), f"linked library packed into bundle ({[l.filepath for l in libs]})")
+    simg = bpy.data.images.get("plate_001.png")
+    # Blender keeps native separators on Windows; BLI_path_abs normalises '\' -> '/' on Linux workers.
+    check(simg is not None and simg.filepath.replace("\\", "/").startswith("//_ext/") and os.path.exists(bpy.path.abspath(simg.filepath)),
+          f"sequence re-pointed to bundle-relative path: {simg.filepath if simg else None}")
+    check(bpy.data.objects.get("LibSphere") is not None, "linked object present in bundle")
+    os.remove(tmp2)
+except Exception:
+    traceback.print_exc()
+    FAILS.append("linked/sequence pack test crashed")
+
 # --------------------------------------------------------------------------- network (read-only)
 if NET:
     creds = {}

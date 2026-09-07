@@ -1,0 +1,52 @@
+D:\GeoAxis\BlenderCloudRender\tests\test_addon.py:115: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat.use_nodes = True
+00:03.407  blend            | Read blend: "D:\GeoAxis\BlenderCloudRender\tests\_out\bundle\scene_test.blend"
+D:\GeoAxis\BlenderCloudRender\tests\test_addon.py:182: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat.use_nodes = True
+00:04.954  blend            | Read blend: "D:\GeoAxis\BlenderCloudRender\tests\_out\bundle2\scene_linked.blend"
+Blender 5.2.1 LTS (hash 9e2066aef7ef built 2026-08-25 02:38:20)
+STATUS Reinstalled "cloud_render"
+PASS extension module imported as bl_ext.user_default.cloud_render
+PASS extension enabled in preferences
+PASS panel class registered
+PASS Scene.cloud_render property registered
+PASS cloudrender.render_animation operator registered
+PASS Render menu draw overridden
+PASS Ctrl+F12 addon keymap installed
+PASS 100 frames / 8 workers covers all frames
+PASS ceil split: 13 per worker, last ends at 100
+PASS 20 workers for 3 frames collapses to 3 workers
+PASS frame_step honoured: [[1, 4], [7, 10]]
+PASS empty range -> empty plan
+PASS GeForce RTX names accepted
+PASS non-GeForce cards rejected
+PASS OptiX driver table
+Info: Saved as "scene_test.blend"
+PASS texture is external before packing
+Info: Saved copy as "scene_test.cloudrender_tmp.blend"
+PASS session snapshot saved next to the blend
+packing: "D:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b D:\GeoAxis\BlenderCloudRender\tests\_out\scene_test.cloudrender_tmp.blend ...
+[pack_blend] saved working copy to D:\GeoAxis\BlenderCloudRender\tests\_out\bundle\scene_test.blend
+[pack_blend] packed=0 copied=0 missing=0 warnings=0 errors=0
+PASS bundle .blend written
+PASS manifest frame range
+PASS manifest carries denoise/motion blur/DOF: True True True
+PASS output naming: shot_ shot_0007.png
+PASS no missing files / errors: [] []
+PASS bundle zipped
+PASS texture packed inside bundle .blend
+PASS render settings preserved in bundle
+Info: Saved as "lib.blend"
+Info: Saved as "scene_linked.blend"
+Info: Saved copy as "scene_linked.cloudrender_tmp.blend"
+packing: "D:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b D:\GeoAxis\BlenderCloudRender\tests\_out\scene_linked.cloudrender_tmp.blend ...
+[pack_blend] saved working copy to D:\GeoAxis\BlenderCloudRender\tests\_out\bundle2\scene_linked.blend
+[pack_blend] packed=1 copied=1 missing=0 warnings=0 errors=0
+PASS image sequence copied into _ext (['seq_d06ded0f'])
+PASS linked scene: no missing/errors [] []
+Info: Read packed library: '//../libs/lib.blend', parent '<direct>'
+PASS linked library packed into bundle (['//..\\libs\\lib.blend'])
+PASS sequence re-pointed to bundle-relative path: //_ext\seq_d06ded0f\plate_001.png
+PASS linked object present in bundle
+
+==== 0 failure(s) ====

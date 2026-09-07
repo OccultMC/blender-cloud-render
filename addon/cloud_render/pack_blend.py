@@ -342,6 +342,52 @@ def pass_blendcache():
         REPORT["copied"].append(src + os.sep)
 
 
+def _fix(path: str) -> str:
+    """Bundle-relative paths must use forward slashes so the Linux worker resolves them."""
+    return path.replace("\\", "/") if path and path.startswith("//") else path
+
+
+def pass_normalize_slashes():
+    for coll_name in ("images", "libraries", "sounds", "fonts", "volumes", "movieclips", "cache_files"):
+        for idb in getattr(bpy.data, coll_name, []):
+            try:
+                fp = idb.filepath
+                if fp != _fix(fp):
+                    idb.filepath = _fix(fp)
+            except Exception:
+                pass
+    for ob in bpy.data.objects:
+        for md in ob.modifiers:
+            try:
+                if md.type == "FLUID" and md.fluid_type == "DOMAIN":
+                    md.domain_settings.cache_directory = _fix(md.domain_settings.cache_directory)
+                elif md.type in {"OCEAN", "MESH_CACHE"}:
+                    md.filepath = _fix(md.filepath)
+                elif md.type == "DYNAMIC_PAINT" and md.canvas_settings:
+                    for surf in md.canvas_settings.canvas_surfaces:
+                        surf.image_output_path = _fix(surf.image_output_path)
+            except Exception:
+                pass
+        for ps in ob.particle_systems:
+            try:
+                ps.point_cache.filepath = _fix(ps.point_cache.filepath)
+            except Exception:
+                pass
+    for scene in bpy.data.scenes:
+        scene.render.filepath = _fix(scene.render.filepath)
+        se = scene.sequence_editor
+        if not se:
+            continue
+        for s in (getattr(se, "strips_all", None) or getattr(se, "sequences_all", None) or []):
+            try:
+                if s.type == "MOVIE":
+                    s.filepath = _fix(s.filepath)
+                elif s.type == "IMAGE":
+                    s.directory = _fix(s.directory)
+            except Exception:
+                pass
+
+
 def remaining_external():
     left = []
     for p in bpy.utils.blend_paths(absolute=True, packed=False, local=False):
@@ -439,6 +485,7 @@ def main():
         bpy.ops.file.make_paths_relative()
     except Exception as exc:
         warn(f"make_paths_relative: {exc}")
+    pass_normalize_slashes()
     remaining_external()
     bpy.ops.wm.save_as_mainfile(filepath=bundle_blend, compress=True, copy=False, relative_remap=False)
     for stale in glob.glob(os.path.join(OUT_DIR, "*.blend1")):
