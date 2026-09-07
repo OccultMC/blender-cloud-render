@@ -509,6 +509,7 @@ class CloudJob:
                     w.state = "done"
 
     def _poll_worker_status(self) -> None:
+        recheck: list[WorkerState] = []
         for w in self.workers:
             if w.state in ("pending", "dead", "failed") or w.instance_id is None:
                 continue
@@ -535,15 +536,25 @@ class CloudJob:
                     self.log(f"worker {w.index} FAILED: {w.error[:200]}")
                 elif state == "done":
                     if w.remaining:
-                        # worker says done but frames missing -> treat as failure so it is retried
-                        w.state = "failed"
-                        w.error = "worker finished but frames are missing in R2"
+                        recheck.append(w)  # last upload may have landed after our frame listing
                     else:
                         w.state = "done"
                 elif w.state == "done":
                     pass  # all frames already in R2 (set by _poll_frames); keep it
                 elif state in ("starting", "downloading", "rendering", "uploading"):
                     w.state = state
+        if recheck:
+            self._poll_frames()
+            with self.lock:
+                for w in recheck:
+                    if w.state in ("done", "failed", "dead"):
+                        continue
+                    if w.remaining:
+                        w.state = "failed"
+                        w.error = f"worker finished but frames missing in R2: {w.remaining[:8]}"
+                        self.log(f"worker {w.index} FAILED: {w.error}")
+                    else:
+                        w.state = "done"
 
     def _poll_instances(self) -> None:
         instances = {int(i["id"]): i for i in self.vast.list_instances() if i.get("id") is not None}

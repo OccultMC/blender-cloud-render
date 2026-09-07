@@ -6,3 +6,5 @@ __pycache__/
 tests/_out/
 dist/
 tests/*.log
+jobs/
+logs/
