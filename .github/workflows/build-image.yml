@@ -19,7 +19,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}
+  # Docker requires a lowercase repository name (github.repository is "OccultMC/...").
+  IMAGE: ghcr.io/occultmc/blender-cloud-render
 
 jobs:
   build:
