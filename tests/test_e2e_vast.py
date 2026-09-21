@@ -27,6 +27,7 @@ ap.add_argument("--blender", required=True)
 ap.add_argument("--ghcr-token", default="")
 ap.add_argument("--max-dph", type=float, default=0.15)
 ap.add_argument("--frames", type=int, default=4)
+ap.add_argument("--gpus", type=int, default=1, help="GPUs on the rented machine; >1 also checks one Blender ran per GPU (--max-dph is per GPU)")
 ap.add_argument("--timeout-min", type=float, default=25)
 args = ap.parse_args()
 
@@ -58,6 +59,7 @@ cfg = jobmod.JobConfig(
     r2_secret_key=env["R2_SECRET_ACCESS_KEY"], r2_bucket=env["R2_BUCKET_NAME"], r2_endpoint="", r2_prefix="blender-cloud-render",
     series=["20", "30", "40", "50"], min_vram_gb=8, disk_gb=30, max_dph=args.max_dph, min_reliability=0.95, min_inet_down=200,
     auto_download=True, auto_destroy=True, max_retries=1, poll_interval=10.0, stale_minutes=10, loading_timeout_minutes=15,
+    pick_strategy="CHEAPEST_GPU", min_gpus=args.gpus, max_gpus=args.gpus,
 )
 job = jobmod.CloudJob(cfg)
 job.start()
@@ -81,7 +83,8 @@ print("\nFINAL:", snap["status"], "-", snap["message"])
 print("error:", snap["error"])
 print("cost/h:", snap["cost_per_hour"], "est cost:", round(snap["cost_so_far"], 4))
 for w in snap["workers"]:
-    print(f"  worker {w['index']}: state={w['state']} instance={w['instance_id']} gpu={w['offer'].get('gpu_name')} "
+    print(f"  worker {w['index']}: state={w['state']} instance={w['instance_id']} gpu={w['offer'].get('num_gpus')}x {w['offer'].get('gpu_name')} "
+          f"mode='{w.get('render_mode', '')}' "
           f"${w['offer'].get('dph_total')}/h device={w['device_used']} frames_done={w['frames_done']} err={w['error'][:120]}")
 frames = sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []
 print("downloaded frames:", frames)
@@ -96,5 +99,9 @@ print("log tail:")
 for l in job.log_lines[-25:]:
     print("  " + l)
 ok = snap["status"] == "done" and len(frames) == args.frames and not alive
+if args.gpus > 1:
+    per_gpu = all(w.get("render_mode", "").startswith(f"{min(args.gpus, args.frames)} processes") for w in snap["workers"])
+    print("one Blender per GPU:", per_gpu)
+    ok = ok and per_gpu
 print("\nE2E", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
