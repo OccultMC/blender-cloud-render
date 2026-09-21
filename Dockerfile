@@ -19,8 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install --no-cache-dir --break-system-packages "boto3>=1.35" requests
 
+# Blender goes in its own layer BEFORE the worker scripts: it is ~500 MB, and hosts that have it
+# cached then only pull a few KB when the worker code changes.
+COPY worker/install_blender.sh /opt/worker/install_blender.sh
+RUN chmod +x /opt/worker/install_blender.sh && /opt/worker/install_blender.sh "${BLENDER_VERSION}"
+
 COPY worker/ /opt/worker/
-RUN chmod +x /opt/worker/*.sh && /opt/worker/install_blender.sh "${BLENDER_VERSION}"
+RUN chmod +x /opt/worker/*.sh
 
 # The NVIDIA container runtime injects libnvoptix.so.1 only when the
 # 'graphics' capability is requested; without it Cycles cannot use OptiX.
