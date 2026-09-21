@@ -1,7 +1,8 @@
 """Launch a cloud render job from the command line (no Blender UI needed).
 
     python scripts/cloud_render_cli.py --blend "C:/path/scene.blend" --workers 10 --output-dir "C:/out/scene" \
-        [--samples 512] [--basename scene_] [--env path/.env] [--max-dph 0.6] [--min-vram 8]
+        [--samples 512] [--basename scene_] [--env path/.env] [--max-dph 0.6] [--min-vram 8] \
+        [--min-gpus 2 --max-gpus 8 --pick CHEAPEST_GPU]
 
 Applies optional overrides (samples, output basename) to a temporary copy of the
 .blend - the original file is never modified - then runs the same CloudJob the
@@ -36,8 +37,13 @@ ap.add_argument("--blender", default=DEFAULT_BLENDER)
 ap.add_argument("--samples", type=int, default=0, help="override Cycles samples (0 = keep file setting)")
 ap.add_argument("--basename", default="", help="output file name prefix (default: <blend name>_)")
 ap.add_argument("--job-root", default=os.path.join(ROOT, "jobs"))
-ap.add_argument("--max-dph", type=float, default=0.6)
-ap.add_argument("--min-vram", type=int, default=8)
+ap.add_argument("--max-dph", type=float, default=0.6, help="max $/hour per GPU (0 = no limit)")
+ap.add_argument("--min-gpus", type=int, default=1, help="minimum GPUs per machine")
+ap.add_argument("--max-gpus", type=int, default=1, help="maximum GPUs per machine (0 = no limit)")
+ap.add_argument("--pick", default="CHEAPEST", choices=["CHEAPEST", "CHEAPEST_GPU", "BEST", "FASTEST"])
+ap.add_argument("--gpu-mode", default="AUTO", choices=["AUTO", "PER_GPU", "COMBINED"],
+                help="multi-GPU hosts: one Blender per GPU (AUTO checks host RAM first) or all GPUs on each frame")
+ap.add_argument("--min-vram", type=int, default=8, help="GB per GPU")
 ap.add_argument("--disk", type=int, default=40)
 ap.add_argument("--series", default="20,30,40,50")
 ap.add_argument("--min-reliability", type=float, default=0.95)
@@ -104,6 +110,8 @@ cfg = jobmod.JobConfig(
     r2_prefix="blender-cloud-render", series=[s.strip() for s in args.series.split(",") if s.strip()],
     min_vram_gb=args.min_vram, disk_gb=args.disk, max_dph=args.max_dph, min_reliability=args.min_reliability,
     min_inet_down=args.min_inet_down, auto_download=True, auto_destroy=True, max_retries=args.retries,
+    pick_strategy=args.pick, min_gpus=args.min_gpus, max_gpus=args.max_gpus,
+    multi_gpu_mode=args.gpu_mode,
 )
 job = jobmod.CloudJob(cfg)
 job.start()

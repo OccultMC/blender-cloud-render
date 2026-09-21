@@ -14,7 +14,7 @@ from bpy.app.handlers import persistent
 
 from . import ops, prefs, props, state, ui
 
-_CLASSES = (prefs.CLOUDRENDER_preferences, props.CloudRenderSettings) + ops.CLASSES + ui.CLASSES
+_CLASSES = (prefs.CLOUDRENDER_preferences, props.CloudOfferItem, props.CloudRenderSettings) + ops.CLASSES + ui.CLASSES
 
 
 @persistent

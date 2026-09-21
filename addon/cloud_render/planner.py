@@ -38,6 +38,32 @@ def split_frames(frame_start: int, frame_end: int, frame_step: int, workers: int
     return plan
 
 
+def split_frames_weighted(frame_start: int, frame_end: int, frame_step: int, weights: list) -> list[dict]:
+    """Like split_frames, but worker i gets a contiguous share proportional to weights[i]
+    (its GPU count), at least one frame each. Extra workers beyond the frame count are dropped.
+    """
+    frames = frame_list(frame_start, frame_end, frame_step)
+    if not frames or not weights:
+        return []
+    weights = [max(1e-6, float(w)) for w in weights[:len(frames)]]
+    n, total = len(weights), sum(weights)
+    plan, start, acc = [], 0, 0.0
+    for i, w in enumerate(weights):
+        acc += w
+        end = len(frames) if i == n - 1 else round(len(frames) * acc / total)
+        end = min(max(end, start + 1), len(frames) - (n - 1 - i))
+        part = frames[start:end]
+        start = end
+        plan.append({
+            "index": i,
+            "frame_start": part[0],
+            "frame_end": part[-1],
+            "frame_step": max(1, int(frame_step)),
+            "frames": part,
+        })
+    return plan
+
+
 def describe_plan(plan: list[dict]) -> str:
     if not plan:
         return "no frames"

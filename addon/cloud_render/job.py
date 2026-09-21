@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -71,6 +72,18 @@ class JobConfig:
     loading_timeout_minutes: float = 20.0
     keep_bundle_in_r2: bool = False
     device: str = "OPTIX"
+    # offer selection
+    pick_strategy: str = "CHEAPEST"      # CHEAPEST / BEST / FASTEST / MANUAL
+    offer_id: int = 0                    # a specific Vast offer id (MANUAL), 0 = auto
+    min_cpu_ram_gb: int = 0
+    min_cpu_cores: int = 0
+    gpu_name_contains: str = ""
+    geforce_only: bool = True
+    min_dlperf: float = 0.0
+    # GPUs per machine; max_dph is a cap per GPU, so it equals the machine price at 1/1
+    min_gpus: int = 1
+    max_gpus: int = 1
+    multi_gpu_mode: str = "AUTO"         # AUTO / PER_GPU / COMBINED (worker CR_GPU_MODE)
 
 
 @dataclass
@@ -93,6 +106,10 @@ class WorkerState:
     created_at: str = ""
     last_status_at: str = ""
     failed_machines: list = field(default_factory=list)
+    mem: str = ""                    # live memory readings reported by the worker
+    host: str = ""                   # RAM limit / VRAM of the container, once known
+    log_summarised_attempt: int = 0  # attempt number whose worker log was already pulled
+    render_mode: str = ""            # how the worker spread the frames over its GPUs
 
     @property
     def remaining(self) -> list:
@@ -353,6 +370,7 @@ class CloudJob:
             "CR_R2_PREFIX": cfg.r2_prefix.strip("/"),
             "CR_BLENDER_VERSION": ".".join(str(x) for x in cfg.blender_version[:3]),
             "CR_DEVICE": cfg.device,
+            "CR_GPU_MODE": cfg.multi_gpu_mode,
             "CR_AUTO_DESTROY": "1" if cfg.auto_destroy else "0",
             "NVIDIA_DRIVER_CAPABILITIES": "all",
         }
@@ -368,9 +386,13 @@ class CloudJob:
             min_vram_mb=cfg.min_vram_gb * 1024, disk_gb=cfg.disk_gb, max_dph=cfg.max_dph,
             min_reliability=cfg.min_reliability, min_driver=min_driver_for(cfg.blender_version),
             series=cfg.series, min_inet_down=cfg.min_inet_down,
+            min_cpu_ram_mb=cfg.min_cpu_ram_gb * 1024, min_cpu_cores=cfg.min_cpu_cores,
+            gpu_name_contains=cfg.gpu_name_contains, min_dlperf=cfg.min_dlperf, geforce_only=cfg.geforce_only,
+            min_gpus=cfg.min_gpus, max_gpus=cfg.max_gpus,
         )
         offers = [o for o in offers if o.get("machine_id") not in exclude_machines]
-        return VastClient.pick_offers(offers, n)
+        strategy = cfg.pick_strategy if cfg.pick_strategy != "MANUAL" else "BEST"
+        return VastClient.pick_offers(VastClient.rank_offers(offers, strategy), n)
 
     def _create_worker(self, w: WorkerState, offer: dict, image: str, login: str, frames: Optional[list] = None) -> None:
         cfg = self.cfg
@@ -378,8 +400,12 @@ class CloudJob:
         env = self._worker_env(w, frames)
         with self.lock:
             w.state = "creating"
-            w.offer = {k: offer.get(k) for k in ("id", "machine_id", "gpu_name", "gpu_ram", "dph_total",
-                                                  "driver_version", "geolocation", "reliability", "inet_down")}
+            w.offer = {k: offer.get(k) for k in ("id", "machine_id", "gpu_name", "num_gpus", "gpu_ram", "dph_total",
+                                                  "driver_version", "geolocation", "reliability", "inet_down",
+                                                  "cpu_ram", "cpu_cores_effective", "cpu_name", "disk_space")}
+            w.mem = ""
+            w.host = ""
+            w.render_mode = ""
             w.attempts += 1
             w.error = ""
             w.created_at = _now()
@@ -394,24 +420,49 @@ class CloudJob:
             self.instances_ever.add(iid)
             self.cost_per_hour = sum(float(x.offer.get("dph_total") or 0) for x in self.workers
                                      if x.state not in ("done", "failed", "dead", "pending"))
-        self.log(f"worker {w.index}: instance {iid} on {offer.get('gpu_name')} @ ${float(offer.get('dph_total') or 0):.3f}/h "
+        vram = float(offer.get("gpu_ram") or 0) / 1024.0
+        ram = float(offer.get("cpu_ram") or 0) / 1024.0
+        cores = offer.get("cpu_cores_effective") or 0
+        self.log(f"worker {w.index}: instance {iid} on {VastClient.gpu_count(offer)}x {offer.get('gpu_name')} @ ${float(offer.get('dph_total') or 0):.3f}/h "
                  f"({offer.get('geolocation')}, driver {offer.get('driver_version')}) frames {w.frame_start}-{w.frame_end}")
+        self.log(f"worker {w.index}: machine {offer.get('machine_id')} - VRAM {vram:.0f} GB, RAM {ram:.0f} GB, "
+                 f"{float(cores):.0f} cores ({str(offer.get('cpu_name') or '?')[:40]}), disk {float(offer.get('disk_space') or 0):.0f} GB")
         self.save()
 
     def _stage_provision(self) -> None:
         cfg = self.cfg
-        self.set_status("provisioning", f"searching Vast.ai for {len(self.workers)} cheapest RTX workers")
+        self.set_status("provisioning", f"searching Vast.ai for {len(self.workers)} worker(s) ({cfg.pick_strategy.lower()})")
         image = resolve_image_digest(cfg.image, cfg.ghcr_user, cfg.ghcr_token) if cfg.pin_digest else cfg.image
         if image != cfg.image:
             self.log(f"image pinned to {image.split('@')[-1][:19]}...")
         login = ghcr_login_string(cfg.ghcr_user, cfg.ghcr_token)
-        offers = self._find_offers(len(self.workers), set())
+        offers = []
+        if cfg.offer_id and len(self.workers) == 1:
+            try:
+                chosen = self.vast.get_offer(cfg.offer_id)
+            except VastError as exc:
+                chosen = None
+                self.log(f"offer {cfg.offer_id} lookup failed: {exc}")
+            if chosen:
+                offers = [chosen]
+                self.log(f"using selected offer {cfg.offer_id}: {chosen.get('gpu_name')} @ ${float(chosen.get('dph_total') or 0):.3f}/h")
+            else:
+                self.log(f"selected offer {cfg.offer_id} is no longer available - falling back to '{cfg.pick_strategy}' pick")
+        if not offers:
+            offers = self._find_offers(len(self.workers), set())
         if not offers:
             raise RuntimeError("no Vast.ai offers match the GPU/price/driver filters - relax the filters and retry")
-        if len(offers) < len(self.workers):
-            self.log(f"only {len(offers)} offers match; merging frame ranges onto fewer workers")
+        gpu_counts = [VastClient.gpu_count(o) for o in offers]
+        mixed = len(set(gpu_counts)) > 1
+        if len(offers) < len(self.workers) or mixed:
             frames = [f for w in self.workers for f in w.frames]
-            plan = planner.split_frames(frames[0], frames[-1], cfg.frame_step, len(offers))
+            if len(offers) < len(self.workers):
+                self.log(f"only {len(offers)} offers match; merging frame ranges onto fewer workers")
+            if mixed:
+                self.log(f"machines have {gpu_counts} GPUs; splitting frames in proportion to GPU count")
+                plan = planner.split_frames_weighted(frames[0], frames[-1], cfg.frame_step, gpu_counts)
+            else:
+                plan = planner.split_frames(frames[0], frames[-1], cfg.frame_step, len(offers))
             with self.lock:
                 self.workers = [WorkerState(index=p["index"], frames=p["frames"], frame_start=p["frame_start"],
                                             frame_end=p["frame_end"], frame_step=p["frame_step"]) for p in plan]
@@ -510,6 +561,7 @@ class CloudJob:
 
     def _poll_worker_status(self) -> None:
         recheck: list[WorkerState] = []
+        failed_now: list[WorkerState] = []
         for w in self.workers:
             if w.state in ("pending", "dead", "failed") or w.instance_id is None:
                 continue
@@ -529,11 +581,24 @@ class CloudJob:
                 w.current_frame = st.get("current_frame")
                 w.device_used = st.get("device_used")
                 w.gpu = st.get("gpu", "") or ""
+                w.mem = st.get("mem", "") or ""
+                mode = st.get("render_mode", "") or ""
+                if mode and mode != w.render_mode:
+                    w.render_mode = mode
+                    self.log(f"worker {w.index} multi-GPU: {mode}")
+                host = st.get("host") or {}
+                if host and not w.host:
+                    w.host = (f"RAM limit {host.get('ram_limit', '?')}, free {host.get('ram_avail', '?')}, "
+                              f"VRAM {host.get('vram_total', '?')}, disk free {host.get('disk_free', '?')}")
+                    self.log(f"worker {w.index} host: {w.host}")
                 state = st.get("state", "")
                 if state == "failed":
                     w.state = "failed"
                     w.error = st.get("error", "") or "worker reported failure"
                     self.log(f"worker {w.index} FAILED: {w.error[:200]}")
+                    if w.mem:
+                        self.log(f"worker {w.index} last memory reading: {w.mem}")
+                    failed_now.append(w)
                 elif state == "done":
                     if w.remaining:
                         recheck.append(w)  # last upload may have landed after our frame listing
@@ -553,12 +618,96 @@ class CloudJob:
                         w.state = "failed"
                         w.error = f"worker finished but frames missing in R2: {w.remaining[:8]}"
                         self.log(f"worker {w.index} FAILED: {w.error}")
+                        failed_now.append(w)
                     else:
                         w.state = "done"
+        for w in failed_now:
+            self.summarise_worker_log(w)
+
+    # ------------------------------------------------------------------ #
+    # worker log diagnostics
+    # ------------------------------------------------------------------ #
+    _MEM_RE = re.compile(r"Mem:\s*([\d.]+)\s*([KMG])")
+    _INTERESTING = ("ERROR", "error:", "FATAL", "out of memory", "Out of memory", "Killed", "killed",
+                    "exited with code", "OOM", "oom", "Segmentation", "Traceback", "WARNING Maximum number",
+                    "Cannot", "cannot allocate", "No space left", "DIAGNOSIS", "[mem]", "host:")
+
+    def worker_log_key(self, w: WorkerState) -> str:
+        return f"{self.prefix}/logs/worker_{w.index}.log"
+
+    def fetch_worker_log(self, w: WorkerState) -> Optional[str]:
+        """Download the worker's Blender log from R2 into <output>/cloud_logs/. Returns the local path."""
+        try:
+            data = self.r2.get_bytes(self.worker_log_key(w))
+        except R2Error as exc:
+            if "HTTP 404" in str(exc):
+                return None
+            raise
+        log_dir = os.path.join(self.cfg.output_dir, "cloud_logs")
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, f"{self.cfg.job_id}_worker{w.index}_attempt{max(1, w.attempts)}.log")
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+
+    @classmethod
+    def analyse_worker_log(cls, text: str) -> dict:
+        """Peak / last Blender memory figure, the last render stage and the error lines."""
+        peak_mb = 0.0
+        last_stage = ""
+        last_mem = ""
+        errors: list[str] = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            m = cls._MEM_RE.search(line)
+            if m:
+                val = float(m.group(1)) * {"K": 1 / 1024.0, "M": 1.0, "G": 1024.0}[m.group(2)]
+                peak_mb = max(peak_mb, val)
+                last_mem = f"{m.group(1)}{m.group(2)}"
+                stage = line.split("|", 2)[-1].strip() if "|" in line else line
+                last_stage = stage[:100]
+            if any(k in line for k in cls._INTERESTING) and "Loading render kernels" not in line:
+                if not errors or errors[-1] != line[:160]:
+                    errors.append(line[:160])
+        return {"peak_mb": peak_mb, "last_mem": last_mem, "last_stage": last_stage, "errors": errors}
+
+    def summarise_worker_log(self, w: WorkerState, force: bool = False) -> Optional[str]:
+        """Pull the worker's log after a failure and put the useful bits in the job log."""
+        with self.lock:
+            if not force and w.log_summarised_attempt >= w.attempts:
+                return None
+            w.log_summarised_attempt = w.attempts
+        try:
+            path = self.fetch_worker_log(w)
+        except Exception as exc:
+            self.log(f"worker {w.index}: could not fetch worker log: {exc}")
+            return None
+        if path is None:
+            self.log(f"worker {w.index}: no worker log in R2 (the container never got as far as uploading one)")
+            return None
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            info = self.analyse_worker_log(fh.read())
+        self.log(f"worker {w.index} log saved: {path}")
+        if info["peak_mb"]:
+            self.log(f"worker {w.index} blender memory: peak {info['peak_mb'] / 1024.0:.1f} GB, "
+                     f"last {info['last_mem']} at '{info['last_stage']}'")
+        errs = [e for e in info["errors"] if "Refer to the Cycles" not in e]
+        for line in errs[-8:]:
+            self.log(f"worker {w.index} >> {line}")
+        if not errs:
+            self.log(f"worker {w.index}: no error lines in the worker log")
+        return path
 
     def _poll_instances(self) -> None:
         instances = {int(i["id"]): i for i in self.vast.list_instances() if i.get("id") is not None}
         now = _dt.datetime.now(_dt.timezone.utc)
+        was_alive = [w for w in self.workers if w.state not in ("done", "dead", "failed", "pending")]
+        self._poll_instances_locked(instances, now)
+        for w in was_alive:
+            if w.state == "dead":
+                self.summarise_worker_log(w)
+
+    def _poll_instances_locked(self, instances: dict, now) -> None:
         with self.lock:
             for w in self.workers:
                 if w.instance_id is None or w.state in ("done", "dead", "failed", "pending"):

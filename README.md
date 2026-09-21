@@ -67,7 +67,7 @@ Then in Blender: *Edit > Preferences > Get Extensions > (dropdown) Install from 
 2. Render properties (Cycles) > **Render on Cloud** > tick it.
 3. Set **Number of Workers** (0-20; 0 = render locally). The panel shows how the
    frames split, e.g. `100 frames over 8 workers (12-13 frames each)`.
-4. Optional filters: RTX series toggles, min VRAM, max $/hour; *Worker Options*
+4. Optional filters: RTX series toggles, GPUs per machine, min VRAM, max $/GPU/hour; *Worker Options*
    has reliability, download speed, disk, retries, auto-download, self-destroy.
 5. **Find Workers** previews the cheapest N offers and the total $/hour.
 6. **Render > Render Animation on Cloud** (or `Ctrl+F12`, or the panel button).
@@ -97,13 +97,42 @@ still referenced from outside the bundle is listed as a warning in the panel.
 
 ### Worker selection
 
-Vast.ai offers are queried for single-GPU, verified, rentable NVIDIA hosts with
-the requested VRAM/disk/reliability/bandwidth, sorted by `$/hour`, then filtered
+Vast.ai offers are queried for verified, rentable NVIDIA hosts with the
+requested GPU count/VRAM/disk/reliability/bandwidth, sorted by `$/hour`, then filtered
 client-side to GeForce RTX 20/30/40/50 cards (workstation RTX A/Ada/PRO cards
 are excluded) whose driver meets the Cycles OptiX floor for your Blender version
 (470 for 4.x, 570 for 5.0/5.1, 575 for 5.2). The cheapest N on distinct hosts
 win. Dead or stalled workers are destroyed and their remaining frames
 re-dispatched to the next cheapest host (up to *Retries per worker*).
+
+### Multi-GPU machines
+
+*GPUs per Machine Min/Max* (default 1/1) widens the search to multi-GPU offers.
+Set e.g. Min 2 / Max 8 with **Pick: Cheapest per GPU** to rent the machines with
+the lowest `$/GPU/hour` (*Cheapest* still ranks by the whole machine's price).
+
+* *Max $/GPU/hour* is per card: at 0.60 a 4-GPU machine may cost up to $2.40/h.
+  The offer list shows both the machine price and the price per GPU.
+* *Min VRAM* is per card. Cycles does not pool memory, so the scene must fit on
+  each GPU.
+* When the rented machines have different GPU counts, frames are split in
+  proportion (a 4-GPU worker gets four times the frames of a 1-GPU worker).
+* CLI: `--min-gpus 2 --max-gpus 8 --pick CHEAPEST_GPU` (`--max-gpus 0` = no limit).
+
+The worker always renders on every GPU and never on the CPU (OpenImageDenoise is
+forced onto the GPU as well). How the GPUs are used is set by *Worker Options >
+Multi-GPU* (`--gpu-mode`, worker env `CR_GPU_MODE`):
+
+| Mode | Behaviour |
+|---|---|
+| **Auto** (default) | Animations: one Blender process per GPU, pinned with `CUDA_VISIBLE_DEVICES`, each rendering every Nth frame. This beats sharing a frame between cards because the per-frame CPU work (scene sync, BVH build) also runs in parallel, so no GPU waits for it. Every process keeps its own copy of the scene in host RAM, so the worker loads one process first, measures its peak RSS against the container's free RAM, and starts only as many as fit - grouping the GPUs (e.g. 2 processes x 2 GPUs) or falling back to a single process on all GPUs when RAM is tight. Single images, and hosts with one GPU, use one process on all GPUs. |
+| **One Blender per GPU** | As above without the RAM check. |
+| **All GPUs per frame** | One process; Cycles splits each frame across the cards. Least host RAM. |
+
+If a per-GPU process dies (usually host RAM), its unfinished frames are rendered
+by one process on all GPUs before the worker gives up. The mode a worker chose is
+written to the job log (`worker 0 multi-GPU: 4 processes x 1/1/1/1 GPUs`).
+`python tests/test_worker_multigpu.py` simulates all of these paths without a GPU.
 
 ## Worker image
 

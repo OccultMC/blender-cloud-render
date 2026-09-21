@@ -73,6 +73,16 @@ check(len(planner.split_frames(1, 3, 1, 20)) == 3, "20 workers for 3 frames coll
 plan = planner.split_frames(1, 10, 3, 2)
 check([p["frames"] for p in plan] == [[1, 4], [7, 10]], f"frame_step honoured: {[p['frames'] for p in plan]}")
 check(planner.split_frames(5, 4, 1, 3) == [], "empty range -> empty plan")
+plan = planner.split_frames_weighted(1, 100, 1, [4, 1, 1, 2])
+check([len(p["frames"]) for p in plan] == [50, 12, 13, 25] and [f for p in plan for f in p["frames"]] == list(range(1, 101)),
+      f"weighted split follows GPU counts: {[len(p['frames']) for p in plan]}")
+check([len(p["frames"]) for p in planner.split_frames_weighted(1, 3, 1, [8, 1, 1, 1])] == [1, 1, 1], "weighted split: one frame minimum, extra workers dropped")
+
+# --------------------------------------------------------------------------- multi-GPU ranking
+_offers = [{"id": 1, "num_gpus": 1, "dph_total": 0.20}, {"id": 2, "num_gpus": 4, "dph_total": 0.60},
+           {"id": 3, "num_gpus": 2, "dph_total": 0.30}, {"id": 4, "num_gpus": 8, "dph_total": 1.20}]
+check([o["id"] for o in ext.vast.VastClient.rank_offers(_offers, "CHEAPEST")] == [1, 3, 2, 4], "CHEAPEST ranks by machine price")
+check([o["id"] for o in ext.vast.VastClient.rank_offers(_offers, "CHEAPEST_GPU")] == [4, 2, 3, 1], "CHEAPEST_GPU ranks by $/GPU, more cards first on a tie")
 
 # --------------------------------------------------------------------------- gpu regex
 ok_names = ["RTX 4090", "RTX 3080 Ti", "RTX 2080 Ti", "RTX 5090", "RTX 4070 Ti Super", "RTX_3060", "GeForce RTX 5080"]

@@ -95,25 +95,46 @@ class VastClient:
     # ----------------------------------------------------------------- offers
     def search_offers(self, *, min_vram_mb: int, disk_gb: int, max_dph: float, min_reliability: float,
                       min_driver: int, series: Iterable[str], min_inet_down: int = 100,
-                      geolocations: Optional[list] = None, limit: int = 400) -> list[dict]:
-        """Cheapest single-GPU GeForce RTX offers first, filtered client-side by series/driver."""
+                      geolocations: Optional[list] = None, limit: int = 400,
+                      min_cpu_ram_mb: int = 0, min_cpu_cores: int = 0, gpu_name_contains: str = "",
+                      min_dlperf: float = 0.0, geforce_only: bool = True,
+                      min_gpus: int = 1, max_gpus: int = 1) -> list[dict]:
+        """NVIDIA offers with min_gpus..max_gpus cards, cheapest first, filtered by series/driver/RAM/CPU/name.
+
+        ``max_dph`` is a price cap per GPU (identical to the machine price for single-GPU
+        offers); ``gpu_ram`` is per card. ``max_gpus`` 0 means no upper bound.
+        """
+        min_gpus = max(1, int(min_gpus))
+        max_gpus = max(min_gpus, int(max_gpus)) if int(max_gpus) > 0 else 0
+        num_gpus = {"eq": min_gpus} if max_gpus == min_gpus else {"gte": min_gpus}
+        if max_gpus > min_gpus:
+            num_gpus["lte"] = max_gpus
+        if max_gpus != 1:
+            limit = max(limit, 1000)   # multi-GPU offers sit behind the cheap single-GPU ones
         query = {
             "limit": limit,
             "type": "ondemand",
             "verified": {"eq": True},
             "rentable": {"eq": True},
             "rented": {"eq": False},
-            "num_gpus": {"eq": 1},
+            "num_gpus": num_gpus,
             "gpu_arch": {"eq": "nvidia"},
             "gpu_ram": {"gte": int(min_vram_mb)},
             "disk_space": {"gte": float(disk_gb)},
             "reliability": {"gte": float(min_reliability)},
             "inet_down": {"gte": float(min_inet_down)},
-            "cuda_max_good": {"gte": 12.0},
+            # no cuda_max_good here: Vast reads it as "my image uses CUDA x" and returns no Blackwell
+            # card (RTX 50, RTX PRO 6000) for anything below 12.8 - it is checked on the results instead
             "order": [["dph_total", "asc"]],
         }
-        if max_dph > 0:
-            query["dph_total"] = {"lte": float(max_dph)}
+        if max_dph > 0 and max_gpus > 0:
+            query["dph_total"] = {"lte": float(max_dph) * max_gpus}   # per-GPU cap is applied below
+        if min_cpu_ram_mb > 0:
+            query["cpu_ram"] = {"gte": int(min_cpu_ram_mb)}
+        if min_cpu_cores > 0:
+            query["cpu_cores_effective"] = {"gte": float(min_cpu_cores)}
+        if min_dlperf > 0:
+            query["dlperf"] = {"gte": float(min_dlperf)}
         if geolocations:
             query["geolocation"] = {"in": list(geolocations)}
         code, data = self._req("POST", "/bundles/", body=query)
@@ -121,17 +142,67 @@ class VastClient:
             raise VastError(f"search offers failed ({code}): {data.get('msg') or data.get('error') or data}")
         offers = data.get("offers") or []
         wanted = {str(s) for s in series}
+        needle = (gpu_name_contains or "").strip().lower().replace("_", " ")
         out = []
         for o in offers:
             name = (o.get("gpu_name") or "").replace("_", " ").strip()
-            m = GEFORCE_RTX_RE.match(name)
-            if not m or m.group(1) + "0" not in wanted:
+            if geforce_only:
+                m = GEFORCE_RTX_RE.match(name)
+                if not m or m.group(1) + "0" not in wanted:
+                    continue
+            if needle and needle not in name.lower():
                 continue
             if _parse_driver(str(o.get("driver_version", ""))) < min_driver:
+                continue
+            if float(o.get("cuda_max_good") or 0) < 12.0:
+                continue
+            if max_dph > 0 and VastClient.dph_per_gpu(o) > float(max_dph) + 1e-9:
                 continue
             out.append(o)
         out.sort(key=lambda o: (float(o.get("dph_total") or 9e9), -float(o.get("reliability") or 0)))
         return out
+
+    @staticmethod
+    def gpu_count(o: dict) -> int:
+        return max(1, int(o.get("num_gpus") or 1))
+
+    @staticmethod
+    def dph_per_gpu(o: dict) -> float:
+        """Hourly price divided by the number of cards in the offer."""
+        return float(o.get("dph_total") or 9e9) / VastClient.gpu_count(o)
+
+    @staticmethod
+    def value_score(o: dict) -> float:
+        """Rendering throughput per dollar: Vast's dlperf benchmark divided by the hourly price."""
+        dph = float(o.get("dph_total") or 0)
+        return (float(o.get("dlperf") or 0) / dph) if dph > 0 else 0.0
+
+    @staticmethod
+    def rank_offers(offers: list[dict], strategy: str) -> list[dict]:
+        """Order offers for a strategy: CHEAPEST, CHEAPEST_GPU ($ per card), BEST (value per $), FASTEST (raw dlperf)."""
+        strategy = (strategy or "CHEAPEST").upper()
+        if strategy == "CHEAPEST_GPU":
+            # more cards first on a tie: same $/GPU, fewer machines to pull the image and bundle
+            key = lambda o: (VastClient.dph_per_gpu(o), -VastClient.gpu_count(o), -float(o.get("reliability") or 0))
+        elif strategy == "BEST":
+            key = lambda o: (-VastClient.value_score(o), float(o.get("dph_total") or 9e9))
+        elif strategy == "FASTEST":
+            key = lambda o: (-float(o.get("dlperf") or 0), float(o.get("dph_total") or 9e9))
+        else:
+            key = lambda o: (float(o.get("dph_total") or 9e9), -float(o.get("reliability") or 0))
+        return sorted(offers, key=key)
+
+    def get_offer(self, offer_id: int) -> Optional[dict]:
+        """Look one offer up by id (None if it is gone or already rented)."""
+        query = {"id": {"eq": int(offer_id)}, "type": "ondemand", "limit": 1}
+        code, data = self._req("POST", "/bundles/", body=query)
+        if code != 200:
+            raise VastError(f"offer lookup failed ({code}): {data.get('msg') or data.get('error') or data}")
+        offers = data.get("offers") or []
+        for o in offers:
+            if int(o.get("id", -1)) == int(offer_id) and o.get("rentable", True) and not o.get("rented", False):
+                return o
+        return None
 
     @staticmethod
     def pick_offers(offers: list[dict], n: int) -> list[dict]:

@@ -40,7 +40,9 @@ def pick_device():
             for d in prefs.devices:
                 d.use = d.type == dev_type
             names = ", ".join(d.name for d in gpus)
-            print(f"[gpu_setup] using {dev_type}: {names}", flush=True)
+            off = ", ".join(f"{d.name} ({d.type})" for d in prefs.devices if not d.use) or "none"
+            visible = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
+            print(f"[gpu_setup] using {len(gpus)} {dev_type} device(s): {names} (visible GPUs: {visible}; disabled: {off})", flush=True)
             return dev_type
         print(f"[gpu_setup] no {dev_type} devices found", flush=True)
     prefs.compute_device_type = "NONE"
@@ -62,6 +64,9 @@ def main():
         if dev_type != "OPTIX" and getattr(cyc, "denoiser", "") == "OPTIX":
             cyc.denoiser = "OPENIMAGEDENOISE"
             print(f"[gpu_setup] scene '{scene.name}': OptiX denoiser -> OpenImageDenoise", flush=True)
+        # OpenImageDenoise runs on the GPU since 4.1; without this it can fall back to the CPU.
+        if dev_type != "CPU" and hasattr(cyc, "denoising_use_gpu"):
+            cyc.denoising_use_gpu = True
         print(
             f"[gpu_setup] scene '{scene.name}': device={cyc.device} samples={cyc.samples} "
             f"denoise={cyc.use_denoising} denoiser={getattr(cyc, 'denoiser', '?')} "

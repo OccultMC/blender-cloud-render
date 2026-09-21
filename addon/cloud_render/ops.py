@@ -26,7 +26,43 @@ JOBS_DIRNAME = "cloud_render_jobs"
 
 def cloud_enabled(scene) -> bool:
     s = getattr(scene, "cloud_render", None)
-    return bool(s and s.enabled and scene.render.engine == "CYCLES" and s.worker_count > 0)
+    return bool(s and s.enabled and scene.render.engine == "CYCLES" and (s.worker_count > 0 or s.mode == "IMAGE"))
+
+
+def search_offers_for(context, limit: int = 80) -> list:
+    """Run the offer search with the panel's filters; returns ranked raw Vast offers."""
+    s = context.scene.cloud_render
+    creds = resolve_credentials(get_prefs(context))
+    if not creds.vast_key:
+        raise VastError("Vast.ai API key missing (add-on preferences)")
+    client = VastClient(creds.vast_key)
+    offers = client.search_offers(
+        min_vram_mb=s.min_vram_gb * 1024, disk_gb=s.disk_gb, max_dph=s.max_price,
+        min_reliability=s.min_reliability, min_driver=min_driver_for(tuple(bpy.app.version)),
+        series=s.selected_series(), min_inet_down=s.min_inet_down,
+        min_cpu_ram_mb=s.min_ram_gb * 1024, min_cpu_cores=s.min_cpu_cores,
+        gpu_name_contains=s.gpu_name_contains, min_dlperf=s.min_dlperf, geforce_only=s.geforce_only,
+        min_gpus=s.min_gpus, max_gpus=s.max_gpus,
+    )
+    strategy = s.pick_strategy if s.pick_strategy != "MANUAL" else "BEST"
+    return VastClient.rank_offers(offers, strategy)[:limit]
+
+
+def fill_offer_list(s, offers: list) -> None:
+    keep_id = s.selected_offer_id
+    s.offers.clear()
+    for o in offers:
+        it = s.offers.add()
+        it.offer_id = int(o.get("id") or 0); it.machine_id = int(o.get("machine_id") or 0)
+        it.gpu = (o.get("gpu_name") or "").replace("_", " "); it.num_gpus = VastClient.gpu_count(o)
+        it.vram_gb = int(round((o.get("gpu_ram") or 0) / 1024)); it.ram_gb = int(round((o.get("cpu_ram") or 0) / 1024))
+        it.cpu_cores = int(round(o.get("cpu_cores_effective") or o.get("cpu_cores") or 0)); it.cpu_name = o.get("cpu_name") or ""
+        it.dph = float(o.get("dph_total") or 0); it.dlperf = float(o.get("dlperf") or 0); it.score = VastClient.value_score(o)
+        it.reliability = float(o.get("reliability") or 0); it.inet_down = float(o.get("inet_down") or 0)
+        it.geo = o.get("geolocation") or ""; it.driver = str(o.get("driver_version") or ""); it.disk_gb = int(o.get("disk_space") or 0)
+    # keep the previous manual selection highlighted if it is still listed
+    idx = next((i for i, it in enumerate(s.offers) if keep_id and it.offer_id == keep_id), -1)
+    s["offer_index"] = idx          # bypass the update callback (no strategy change)
 
 
 def output_dir_for(scene) -> str:
@@ -72,7 +108,7 @@ def validate(context) -> str:
     return ""
 
 
-def build_config(context, tmp_blend: str) -> JobConfig:
+def build_config(context, tmp_blend: str, plan=None) -> JobConfig:
     scene = context.scene
     s = scene.cloud_render
     creds = resolve_credentials(get_prefs(context))
@@ -80,7 +116,8 @@ def build_config(context, tmp_blend: str) -> JobConfig:
     blend_dir = os.path.dirname(blend_path)
     name = os.path.splitext(os.path.basename(blend_path))[0]
     job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
-    plan = planner.split_frames(scene.frame_start, scene.frame_end, scene.frame_step, s.worker_count)
+    if plan is None:
+        plan = planner.split_frames(scene.frame_start, scene.frame_end, scene.frame_step, s.worker_count)
     return JobConfig(
         job_id=job_id, blend_path=blend_path, blend_name=name, blend_dir=blend_dir,
         job_dir=os.path.join(jobs_root(), job_id), output_dir=output_dir_for(scene),
@@ -93,6 +130,10 @@ def build_config(context, tmp_blend: str) -> JobConfig:
         max_dph=s.max_price, min_reliability=s.min_reliability, min_inet_down=s.min_inet_down,
         auto_download=s.auto_download, auto_destroy=s.auto_destroy, max_retries=s.max_retries,
         keep_bundle_in_r2=s.keep_bundle,
+        pick_strategy=s.pick_strategy, offer_id=(s.selected_offer_id if s.pick_strategy == "MANUAL" else 0),
+        min_cpu_ram_gb=s.min_ram_gb, min_cpu_cores=s.min_cpu_cores, gpu_name_contains=s.gpu_name_contains,
+        geforce_only=s.geforce_only, min_dlperf=s.min_dlperf,
+        min_gpus=s.min_gpus, max_gpus=s.max_gpus, multi_gpu_mode=s.multi_gpu_mode,
     )
 
 
@@ -140,42 +181,66 @@ class CLOUDRENDER_OT_render_animation(Operator):
         return {"FINISHED"}
 
 
-class CLOUDRENDER_OT_preview_workers(Operator):
-    """Search Vast.ai for the cheapest matching GPUs without renting anything"""
-    bl_idname = "cloudrender.preview_workers"
-    bl_label = "Find Workers"
+class CLOUDRENDER_OT_render_image_cloud(Operator):
+    """Render the current frame on ONE Vast.ai machine (the selected offer, or the best match for the filters)"""
+    bl_idname = "cloudrender.render_image_cloud"
+    bl_label = "Render Image on Cloud"
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         scene = context.scene
         s = scene.cloud_render
-        creds = resolve_credentials(get_prefs(context))
-        if not creds.vast_key:
-            self.report({"ERROR"}, "Vast.ai API key missing (add-on preferences)")
+        err = validate(context)
+        if err:
+            self.report({"ERROR"}, err)
+            return {"CANCELLED"}
+        if s.geforce_only and not s.selected_series():
+            self.report({"ERROR"}, "Select at least one RTX series (or turn off 'GeForce RTX only')")
+            return {"CANCELLED"}
+        if s.pick_strategy == "MANUAL" and not s.selected_offer_id:
+            self.report({"ERROR"}, "Pick an offer in the list, or choose an automatic pick strategy")
             return {"CANCELLED"}
         try:
-            client = VastClient(creds.vast_key)
-            offers = client.search_offers(
-                min_vram_mb=s.min_vram_gb * 1024, disk_gb=s.disk_gb, max_dph=s.max_price,
-                min_reliability=s.min_reliability, min_driver=min_driver_for(tuple(bpy.app.version)),
-                series=s.selected_series(), min_inet_down=s.min_inet_down,
-            )
+            tmp_blend = packer.snapshot_session(bpy.data.filepath)
+        except Exception as exc:
+            self.report({"ERROR"}, f"Could not snapshot the session: {exc}")
+            return {"CANCELLED"}
+        frame = scene.frame_current
+        plan = planner.split_frames(frame, frame, 1, 1)
+        cfg = build_config(context, tmp_blend, plan=plan)
+        job = CloudJob(cfg)
+        s.active_job_id = cfg.job_id
+        state.set_job(job)
+        how = f"offer {cfg.offer_id}" if cfg.offer_id else f"auto pick: {cfg.pick_strategy.lower()}"
+        job.log(f"job {cfg.job_id}: single image, frame {frame}, 1 worker ({how}); Blender {cfg.blender_version_string}")
+        job.start()
+        self.report({"INFO"}, f"Cloud render started: frame {frame} on 1 worker ({how})")
+        return {"FINISHED"}
+
+
+class CLOUDRENDER_OT_preview_workers(Operator):
+    """Search Vast.ai with the filters above and list the matching offers (nothing is rented)"""
+    bl_idname = "cloudrender.preview_workers"
+    bl_label = "Search Offers"
+
+    def execute(self, context):
+        s = context.scene.cloud_render
+        try:
+            offers = search_offers_for(context)
         except VastError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        n = max(1, s.worker_count)
+        fill_offer_list(s, offers)
+        n = 1 if s.mode == "IMAGE" else max(1, s.worker_count)
         picked = VastClient.pick_offers(offers, n)
-        state.OFFERS_PREVIEW = [{
-            "gpu": (o.get("gpu_name") or "").replace("_", " "),
-            "vram": round((o.get("gpu_ram") or 0) / 1024),
-            "dph": float(o.get("dph_total") or 0),
-            "geo": o.get("geolocation") or "",
-            "driver": str(o.get("driver_version") or ""),
-            "rel": float(o.get("reliability") or 0),
-        } for o in picked]
-        total = sum(p["dph"] for p in state.OFFERS_PREVIEW)
+        state.OFFERS_PREVIEW = []
+        total = sum(float(o.get("dph_total") or 0) for o in picked)
+        gpus = sum(VastClient.gpu_count(o) for o in picked)
+        label = {"BEST": "best value", "CHEAPEST": "cheapest", "CHEAPEST_GPU": "cheapest per GPU",
+                 "FASTEST": "fastest", "MANUAL": "top"}[s.pick_strategy]
         state.OFFERS_PREVIEW_MSG = (
-            f"{len(offers)} matching offers; cheapest {len(picked)} = ${total:.3f}/hour total"
-            if picked else "No offers match - relax VRAM/price/series filters"
+            f"{len(offers)} offers match; {label} {n} = {gpus} GPUs, ${total:.3f}/hour" if picked
+            else "No offers match - relax the filters"
         )
         self.report({"INFO"}, state.OFFERS_PREVIEW_MSG)
         state.redraw_properties()
@@ -330,6 +395,41 @@ class CLOUDRENDER_OT_show_log(Operator):
             col.label(text=line[:120])
 
 
+class CLOUDRENDER_OT_fetch_worker_logs(Operator):
+    """Download every worker's Blender log from R2 into <output>/cloud_logs and summarise errors + memory in the job log"""
+    bl_idname = "cloudrender.fetch_worker_logs"
+    bl_label = "Fetch Worker Logs"
+
+    def execute(self, context):
+        job = state.ACTIVE_JOB
+        if job is None:
+            self.report({"WARNING"}, "No job")
+            return {"CANCELLED"}
+        got = []
+        for w in job.workers:
+            if w.instance_id is None and w.attempts == 0:
+                continue
+            path = job.summarise_worker_log(w, force=True)
+            if path:
+                got.append(path)
+        state.redraw_properties()
+        if not got:
+            self.report({"WARNING"}, "No worker logs in R2 yet (workers upload their log when Blender exits)")
+            return {"CANCELLED"}
+        folder = os.path.dirname(got[0])
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(folder)  # noqa: S606
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception:
+            pass
+        self.report({"INFO"}, f"{len(got)} worker log(s) saved to {folder}")
+        return {"FINISHED"}
+
+
 class CLOUDRENDER_OT_test_vast(Operator):
     """Check the Vast.ai API key"""
     bl_idname = "cloudrender.test_vast"
@@ -393,6 +493,7 @@ class CLOUDRENDER_OT_load_env(Operator):
 
 CLASSES = (
     CLOUDRENDER_OT_render_animation,
+    CLOUDRENDER_OT_render_image_cloud,
     CLOUDRENDER_OT_preview_workers,
     CLOUDRENDER_OT_cancel_job,
     CLOUDRENDER_OT_resume_job,
@@ -401,6 +502,7 @@ CLASSES = (
     CLOUDRENDER_OT_clear_job,
     CLOUDRENDER_OT_destroy_all,
     CLOUDRENDER_OT_show_log,
+    CLOUDRENDER_OT_fetch_worker_logs,
     CLOUDRENDER_OT_test_vast,
     CLOUDRENDER_OT_test_r2,
     CLOUDRENDER_OT_load_env,

@@ -26,6 +26,27 @@ class CloudRenderPanelMixin:
         return context.engine in cls.COMPAT_ENGINES
 
 
+class CLOUDRENDER_UL_offers(bpy.types.UIList):
+    """Vast.ai offers matching the filters; click a row to render on that exact machine."""
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+        n = max(1, item.num_gpus)
+        row.label(text=f"{f'{n}x ' if n > 1 else ''}{item.gpu} {item.vram_gb}G", icon="RESTRICT_RENDER_OFF")
+        row.label(text=f"{item.ram_gb}G RAM  {item.cpu_cores}c")
+        row.label(text=f"${item.dph:.3f}/h" + (f" (${item.dph / n:.3f}/GPU)" if n > 1 else ""))
+        row.label(text=f"perf {item.dlperf:.0f}  val {item.score:.0f}")
+        row.label(text=f"{item.geo}  rel {item.reliability:.2f}")
+
+    def filter_items(self, context, data, propname):
+        items = getattr(data, propname); q = self.filter_name.lower().strip()
+        flags = [self.bitflag_filter_item] * len(items)
+        if q:
+            for i, it in enumerate(items):
+                hay = f"{it.gpu} {it.cpu_name} {it.geo} {it.offer_id}".lower()
+                if q not in hay: flags[i] &= ~self.bitflag_filter_item
+        return flags, []
+
+
 class CLOUDRENDER_PT_main(CloudRenderPanelMixin, Panel):
     bl_label = "Render on Cloud"
     bl_order = 5
@@ -42,40 +63,65 @@ class CLOUDRENDER_PT_main(CloudRenderPanelMixin, Panel):
         layout.active = s.enabled
 
         if not s.enabled:
-            layout.label(text="Render Animation on Vast.ai RTX workers; Render Image stays local.", icon="INFO")
+            layout.label(text="Render on Vast.ai GPU workers (animation split across N, or a single image on one).", icon="INFO")
             return
 
+        row = layout.row(align=True)
+        row.prop(s, "mode", expand=True)
         col = layout.column(align=True)
-        col.prop(s, "worker_count")
-        frames = split_frames(scene.frame_start, scene.frame_end, scene.frame_step, max(1, s.worker_count))
-        if s.worker_count == 0:
-            col.label(text="0 workers: Render Animation renders locally", icon="INFO")
+        if s.mode == "IMAGE":
+            col.label(text=f"Frame {scene.frame_current} on 1 worker", icon="RENDER_STILL")
         else:
-            col.label(text=describe_plan(frames), icon="SEQUENCE")
+            col.prop(s, "worker_count")
+            frames = split_frames(scene.frame_start, scene.frame_end, scene.frame_step, max(1, s.worker_count))
+            if s.worker_count == 0:
+                col.label(text="0 workers: Render Animation renders locally", icon="INFO")
+            else:
+                col.label(text=describe_plan(frames), icon="SEQUENCE")
 
-        row = layout.row(align=True, heading="GPU Series")
+        # ---- machine filters ----
+        box = layout.box()
+        box.label(text="Machine filters", icon="FILTER")
+        row = box.row(align=True, heading="GPU Series")
+        row.active = s.geforce_only
         row.prop(s, "series_20", toggle=True)
         row.prop(s, "series_30", toggle=True)
         row.prop(s, "series_40", toggle=True)
         row.prop(s, "series_50", toggle=True)
-
-        col = layout.column(align=True)
+        col = box.column(align=True)
+        col.prop(s, "geforce_only")
+        col.prop(s, "gpu_name_contains")
+        row = col.row(align=True)
+        row.prop(s, "min_gpus", text="GPUs per Machine  Min")
+        row.prop(s, "max_gpus", text="Max")
         col.prop(s, "min_vram_gb")
+        col.prop(s, "min_ram_gb")
+        col.prop(s, "min_cpu_cores")
         col.prop(s, "max_price")
+        col.prop(s, "min_dlperf")
+        box.prop(s, "pick_strategy")
 
         row = layout.row(align=True)
         row.operator("cloudrender.preview_workers", icon="VIEWZOOM")
         job = state.ACTIVE_JOB
         running = job is not None and job.is_running
         sub = row.row(align=True)
-        sub.enabled = not running and s.worker_count > 0
-        sub.operator("cloudrender.render_animation", text="Render Animation on Cloud", icon="RENDER_ANIMATION")
+        if s.mode == "IMAGE":
+            sub.enabled = not running
+            sub.operator("cloudrender.render_image_cloud", text="Render Image on Cloud", icon="RENDER_STILL")
+        else:
+            sub.enabled = not running and s.worker_count > 0
+            sub.operator("cloudrender.render_animation", text="Render Animation on Cloud", icon="RENDER_ANIMATION")
 
         if state.OFFERS_PREVIEW_MSG:
-            box = layout.box()
-            box.label(text=state.OFFERS_PREVIEW_MSG, icon="WORLD")
-            for o in state.OFFERS_PREVIEW:
-                box.label(text=f"{o['gpu']} {o['vram']}GB  ${o['dph']:.3f}/h  {o['geo']}  drv {o['driver']}  rel {o['rel']:.2f}")
+            layout.label(text=state.OFFERS_PREVIEW_MSG, icon="WORLD")
+        if len(s.offers):
+            layout.template_list("CLOUDRENDER_UL_offers", "", s, "offers", s, "offer_index", rows=6)
+            if s.pick_strategy == "MANUAL" and 0 <= s.offer_index < len(s.offers):
+                it = s.offers[s.offer_index]
+                layout.label(text=f"Selected: {max(1, it.num_gpus)}x {it.gpu} {it.vram_gb}GB, {it.ram_gb}GB RAM, {it.cpu_cores} cores, ${it.dph:.3f}/h, {it.geo}", icon="CHECKMARK")
+            elif s.pick_strategy != "MANUAL":
+                layout.label(text="Auto pick is on - click a row to render on that exact machine instead", icon="INFO")
 
 
 class CLOUDRENDER_PT_advanced(CloudRenderPanelMixin, Panel):
@@ -97,6 +143,9 @@ class CLOUDRENDER_PT_advanced(CloudRenderPanelMixin, Panel):
         col.prop(s, "min_inet_down")
         col.prop(s, "disk_gb")
         col.prop(s, "max_retries")
+        sub = layout.column(align=True)
+        sub.active = s.max_gpus > 1
+        sub.prop(s, "multi_gpu_mode")
         col = layout.column(align=True)
         col.prop(s, "auto_download")
         col.prop(s, "auto_destroy")
@@ -148,6 +197,9 @@ class CLOUDRENDER_PT_job(CloudRenderPanelMixin, Panel):
         for w in snap.get("workers", []):
             row = box.row(align=True)
             gpu = (w.get("offer") or {}).get("gpu_name") or "-"
+            ngpu = int((w.get("offer") or {}).get("num_gpus") or 1)
+            if ngpu > 1:
+                gpu = f"{ngpu}x {gpu}"
             dph = float((w.get("offer") or {}).get("dph_total") or 0)
             label = f"W{w['index']}  {w['frame_start']}-{w['frame_end']}  {len(w.get('frames_done', []))}/{len(w['frames'])}"
             row.label(text=label, icon=STATE_ICONS.get(w.get("state"), "DOT"))
@@ -159,6 +211,10 @@ class CLOUDRENDER_PT_job(CloudRenderPanelMixin, Panel):
             if w.get("error"):
                 detail += f"  ! {w['error'][:60]}"
             row.label(text=detail[:120])
+            if w.get("mem") and w.get("state") in ("rendering", "uploading", "failed", "dead"):
+                sub = box.row(align=True)
+                sub.label(text="", icon="BLANK1")
+                sub.label(text=f"mem: {w['mem']}"[:120], icon="MEMORY")
 
         warnings = snap.get("warnings", [])
         if warnings:
@@ -177,6 +233,7 @@ class CLOUDRENDER_PT_job(CloudRenderPanelMixin, Panel):
         row.operator("cloudrender.download_frames", icon="IMPORT")
         row.operator("cloudrender.open_output", icon="FILE_FOLDER")
         row.operator("cloudrender.show_log", text="Log", icon="TEXT")
+        row.operator("cloudrender.fetch_worker_logs", text="Worker Logs", icon="CONSOLE")
         for line in snap.get("log_tail", [])[-4:]:
             layout.label(text=line[:115])
 
@@ -196,7 +253,9 @@ def _draw_render_menu(self, context):
     cloud = cloud_enabled(scene)
 
     layout.operator("render.render", text="Render Image", icon="RENDER_STILL").use_viewport = True
-    if cloud:
+    if s is not None and s.enabled and scene.render.engine == "CYCLES":
+        layout.operator("cloudrender.render_image_cloud", text="Render Image on Cloud (1 worker)", icon="RENDER_STILL")
+    if cloud and s.worker_count > 0:
         layout.operator("cloudrender.render_animation",
                         text=f"Render Animation on Cloud ({s.worker_count} workers)", icon="RENDER_ANIMATION")
         props = layout.operator("render.render", text="Render Animation Locally", icon="RENDER_ANIMATION")
@@ -269,4 +328,4 @@ def remove_keymap():
     _keymaps.clear()
 
 
-CLASSES = (CLOUDRENDER_PT_main, CLOUDRENDER_PT_advanced, CLOUDRENDER_PT_job)
+CLASSES = (CLOUDRENDER_UL_offers, CLOUDRENDER_PT_main, CLOUDRENDER_PT_advanced, CLOUDRENDER_PT_job)
