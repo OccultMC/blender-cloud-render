@@ -145,6 +145,7 @@ class CloudJob:
         self.render_started_at = ""
         self.finished_at = ""
         self.instances_ever: set = set()
+        self.bad_offers: set = set()     # offer ids Vast lists but cannot rent (stale search index)
         self.resume = resume
         self.thread = threading.Thread(target=self._run, name=f"cloudrender-{cfg.job_id}", daemon=True)
         self.r2 = R2Client(cfg.r2_account, cfg.r2_access_key, cfg.r2_secret_key, cfg.r2_bucket, cfg.r2_endpoint)
@@ -406,7 +407,7 @@ class CloudJob:
             gpu_name_contains=cfg.gpu_name_contains, min_dlperf=cfg.min_dlperf, geforce_only=cfg.geforce_only,
             min_gpus=cfg.min_gpus, max_gpus=cfg.max_gpus, min_inet_up=cfg.min_inet_up,
         )
-        offers = [o for o in offers if o.get("machine_id") not in exclude_machines]
+        offers = [o for o in offers if o.get("machine_id") not in exclude_machines and o.get("id") not in self.bad_offers]
         strategy = cfg.pick_strategy if cfg.pick_strategy != "MANUAL" else "BEST"
         return VastClient.pick_offers(VastClient.rank_offers(offers, strategy), n)
 
@@ -489,8 +490,10 @@ class CloudJob:
             except VastError as exc:
                 self.log(f"worker {w.index}: create failed on offer {offer.get('id')}: {exc}")
                 with self.lock:
+                    self.bad_offers.add(offer.get("id"))
                     w.failed_machines.append(offer.get("machine_id"))
                     w.state = "pending"
+                    w.attempts -= 1   # nothing was rented: not a used-up attempt
                 # try the next cheapest offer once more right away
                 alt = self._find_offers(1, {o.get("machine_id") for o in offers} | set(w.failed_machines))
                 if alt:
@@ -791,7 +794,10 @@ class CloudJob:
         except VastError as exc:
             self.log(f"worker {w.index}: retry create failed: {exc}")
             with self.lock:
+                self.bad_offers.add(offers[0].get("id"))
                 w.state = "dead"
+                w.instance_id = None   # the old instance is already destroyed
+                w.attempts -= 1        # nothing was rented: the next poll tries the next offer
         self.r2.put_json(f"{self.prefix}/workers.json", {
             str(x.index): {"instance_id": x.instance_id, "frames": x.frames} for x in self.workers
         })

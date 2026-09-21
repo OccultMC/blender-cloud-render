@@ -149,14 +149,14 @@ def s3_get_json(key: str):
         return None
 
 
-def s3_upload_file(path: Path, key: str, attempts: int = 5) -> None:
+def s3_upload_file(path: Path, key: str, attempts: int = 5, callback=None) -> None:
     from boto3.s3.transfer import TransferConfig
 
     tcfg = TransferConfig(multipart_threshold=64 * 1024 * 1024, multipart_chunksize=32 * 1024 * 1024, max_concurrency=4)
     last = None
     for i in range(attempts):
         try:
-            S3.upload_file(str(path), R2_BUCKET, key, Config=tcfg)
+            S3.upload_file(str(path), R2_BUCKET, key, Config=tcfg, Callback=callback)
             return
         except Exception as exc:  # pragma: no cover - network
             last = exc
@@ -469,7 +469,20 @@ class Uploader:
         self.done = set()
         self.claimed = set()
         self.errors = []
+        self.sent = 0
+        self.last_report = 0.0
         self.threads = [threading.Thread(target=self._run, daemon=True) for _ in range(max(1, threads))]
+
+    def _progress(self, nbytes: int) -> None:
+        # The add-on declares a worker dead when its status stops changing. Bytes leaving the
+        # host are progress too: without this a slow uplink looks like a hung worker.
+        with _log_lock:
+            self.sent += nbytes
+            if time.time() - self.last_report < 20:
+                return
+            self.last_report = time.time()
+            sent = self.sent
+        self.status.update(upload=f"{sent / 1e6:.0f} MB sent, {len(self.done)} files done, {self.q.qsize()} queued")
 
     def start(self):
         for t in self.threads:
@@ -495,7 +508,7 @@ class Uploader:
                         continue
                     self.claimed.add(item)
                 key = self._key_for(item)
-                s3_upload_file(item, key)
+                s3_upload_file(item, key, callback=self._progress)
                 self.done.add(item)
                 self.status.append("frames_uploaded", item.name)
                 log(f"uploaded {item.name} -> {key}")
