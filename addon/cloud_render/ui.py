@@ -141,6 +141,7 @@ class CLOUDRENDER_PT_advanced(CloudRenderPanelMixin, Panel):
         col = layout.column(align=True)
         col.prop(s, "min_reliability")
         col.prop(s, "min_inet_down")
+        col.prop(s, "min_inet_up")
         col.prop(s, "disk_gb")
         col.prop(s, "max_retries")
         sub = layout.column(align=True)

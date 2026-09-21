@@ -42,7 +42,7 @@ def search_offers_for(context, limit: int = 80) -> list:
         series=s.selected_series(), min_inet_down=s.min_inet_down,
         min_cpu_ram_mb=s.min_ram_gb * 1024, min_cpu_cores=s.min_cpu_cores,
         gpu_name_contains=s.gpu_name_contains, min_dlperf=s.min_dlperf, geforce_only=s.geforce_only,
-        min_gpus=s.min_gpus, max_gpus=s.max_gpus,
+        min_gpus=s.min_gpus, max_gpus=s.max_gpus, min_inet_up=s.min_inet_up,
     )
     strategy = s.pick_strategy if s.pick_strategy != "MANUAL" else "BEST"
     return VastClient.rank_offers(offers, strategy)[:limit]
@@ -134,6 +134,7 @@ def build_config(context, tmp_blend: str, plan=None) -> JobConfig:
         min_cpu_ram_gb=s.min_ram_gb, min_cpu_cores=s.min_cpu_cores, gpu_name_contains=s.gpu_name_contains,
         geforce_only=s.geforce_only, min_dlperf=s.min_dlperf,
         min_gpus=s.min_gpus, max_gpus=s.max_gpus, multi_gpu_mode=s.multi_gpu_mode,
+        min_inet_up=s.min_inet_up,
     )
 
 

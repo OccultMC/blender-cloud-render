@@ -84,6 +84,8 @@ class JobConfig:
     min_gpus: int = 1
     max_gpus: int = 1
     multi_gpu_mode: str = "AUTO"         # AUTO / PER_GPU / COMBINED (worker CR_GPU_MODE)
+    min_inet_up: int = 100               # Mbps; slow uplinks stall on large EXR frames
+    reuse_bundle: bool = False           # skip pack/upload: render from the bundle.zip this job id already has in R2
 
 
 @dataclass
@@ -284,9 +286,12 @@ class CloudJob:
                 self.set_status("rendering", "resumed monitoring")
                 self._monitor()
             else:
-                self._stage_pack()
-                self._check_cancel()
-                self._stage_upload()
+                if self.cfg.reuse_bundle:
+                    self._stage_reuse_bundle()
+                else:
+                    self._stage_pack()
+                    self._check_cancel()
+                    self._stage_upload()
                 self._check_cancel()
                 self._stage_provision()
                 self._check_cancel()
@@ -355,8 +360,19 @@ class CloudJob:
         except OSError:
             pass
 
+    def _stage_reuse_bundle(self) -> None:
+        self.set_status("uploading", "reusing the bundle already in R2")
+        remote = self.r2.get_json(f"{self.prefix}/job.json")
+        if not remote or not self.r2.exists(f"{self.prefix}/bundle.zip"):
+            raise RuntimeError(f"no bundle.zip / job.json under {self.prefix} - the bundle was deleted, render from Blender again")
+        with self.lock:
+            self.manifest = remote.get("manifest", {})
+            self.frame_filenames = self.manifest.get("frame_filenames", {})
+
     def _worker_env(self, w: WorkerState, frames: Optional[list] = None) -> dict:
         cfg = self.cfg
+        if frames is None and w.frames != list(range(w.frame_start, w.frame_end + 1, max(1, w.frame_step))):
+            frames = w.frames   # a chunk with gaps (missing-frame jobs): name the frames explicitly
         env = {
             "CR_JOB_ID": cfg.job_id,
             "CR_WORKER_INDEX": str(w.index),
@@ -388,7 +404,7 @@ class CloudJob:
             series=cfg.series, min_inet_down=cfg.min_inet_down,
             min_cpu_ram_mb=cfg.min_cpu_ram_gb * 1024, min_cpu_cores=cfg.min_cpu_cores,
             gpu_name_contains=cfg.gpu_name_contains, min_dlperf=cfg.min_dlperf, geforce_only=cfg.geforce_only,
-            min_gpus=cfg.min_gpus, max_gpus=cfg.max_gpus,
+            min_gpus=cfg.min_gpus, max_gpus=cfg.max_gpus, min_inet_up=cfg.min_inet_up,
         )
         offers = [o for o in offers if o.get("machine_id") not in exclude_machines]
         strategy = cfg.pick_strategy if cfg.pick_strategy != "MANUAL" else "BEST"
@@ -401,7 +417,7 @@ class CloudJob:
         with self.lock:
             w.state = "creating"
             w.offer = {k: offer.get(k) for k in ("id", "machine_id", "gpu_name", "num_gpus", "gpu_ram", "dph_total",
-                                                  "driver_version", "geolocation", "reliability", "inet_down",
+                                                  "driver_version", "geolocation", "reliability", "inet_down", "inet_up",
                                                   "cpu_ram", "cpu_cores_effective", "cpu_name", "disk_space")}
             w.mem = ""
             w.host = ""

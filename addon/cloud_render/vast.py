@@ -98,7 +98,7 @@ class VastClient:
                       geolocations: Optional[list] = None, limit: int = 400,
                       min_cpu_ram_mb: int = 0, min_cpu_cores: int = 0, gpu_name_contains: str = "",
                       min_dlperf: float = 0.0, geforce_only: bool = True,
-                      min_gpus: int = 1, max_gpus: int = 1) -> list[dict]:
+                      min_gpus: int = 1, max_gpus: int = 1, min_inet_up: int = 0) -> list[dict]:
         """NVIDIA offers with min_gpus..max_gpus cards, cheapest first, filtered by series/driver/RAM/CPU/name.
 
         ``max_dph`` is a price cap per GPU (identical to the machine price for single-GPU
@@ -129,6 +129,8 @@ class VastClient:
         }
         if max_dph > 0 and max_gpus > 0:
             query["dph_total"] = {"lte": float(max_dph) * max_gpus}   # per-GPU cap is applied below
+        if min_inet_up > 0:
+            query["inet_up"] = {"gte": float(min_inet_up)}   # frames go back out through the host's uplink
         if min_cpu_ram_mb > 0:
             query["cpu_ram"] = {"gte": int(min_cpu_ram_mb)}
         if min_cpu_cores > 0:

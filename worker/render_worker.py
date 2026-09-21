@@ -57,6 +57,7 @@ R2_PREFIX = env("CR_R2_PREFIX", "blender-cloud-render").strip("/")
 AUTO_DESTROY = env("CR_AUTO_DESTROY", "1") == "1"
 VAST_API_KEY = env("CR_VAST_API_KEY") or env("VAST_API_KEY")
 HEARTBEAT_S = float(env("CR_HEARTBEAT_S", "10"))
+UPLOAD_THREADS = int(env("CR_UPLOAD_THREADS", "4"))
 # Multi-GPU hosts: AUTO = one Blender per GPU (different frames) when host RAM allows, else COMBINED;
 # PER_GPU = always one Blender per GPU; COMBINED = one Blender renders each frame on all GPUs.
 GPU_MODE = env("CR_GPU_MODE", "AUTO").upper()
@@ -459,22 +460,29 @@ def gpu_info() -> str:
 # --------------------------------------------------------------------------- #
 
 class Uploader:
-    def __init__(self, status: Status):
+    """Uploads frames while the render runs. Several at once: a slow route to R2 is usually
+    slow per connection, and one Blender per GPU saves frames faster than one stream drains them."""
+
+    def __init__(self, status: Status, threads: int = UPLOAD_THREADS):
         self.q: "queue.Queue[Path | None]" = queue.Queue()
         self.status = status
         self.done = set()
+        self.claimed = set()
         self.errors = []
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.threads = [threading.Thread(target=self._run, daemon=True) for _ in range(max(1, threads))]
 
     def start(self):
-        self.thread.start()
+        for t in self.threads:
+            t.start()
 
     def enqueue(self, path: Path):
         self.q.put(path)
 
     def finish(self):
-        self.q.put(None)
-        self.thread.join()
+        for _ in self.threads:
+            self.q.put(None)
+        for t in self.threads:
+            t.join()
 
     def _run(self):
         while True:
@@ -482,8 +490,10 @@ class Uploader:
             if item is None:
                 return
             try:
-                if item in self.done:
-                    continue
+                with _log_lock:
+                    if item in self.claimed:
+                        continue
+                    self.claimed.add(item)
                 key = self._key_for(item)
                 s3_upload_file(item, key)
                 self.done.add(item)

@@ -97,6 +97,8 @@ class CloudRenderSettings(PropertyGroup):
     disk_gb: IntProperty(name="Disk (GB)", default=40, min=10, max=500,
                          description="Container disk for Blender, the bundle and rendered frames")
     min_inet_down: IntProperty(name="Min Download Mbps", default=200, min=10, max=5000)
+    min_inet_up: IntProperty(name="Min Upload Mbps", default=100, min=0, max=5000,
+                             description="Host uplink speed; rendered frames are uploaded from the machine, so slow uplinks stall the job")
     auto_download: BoolProperty(name="Download frames as they finish", default=True,
                                 description="Pull finished frames from R2 into the scene's output folder")
     auto_destroy: BoolProperty(name="Workers self-destroy", default=True,

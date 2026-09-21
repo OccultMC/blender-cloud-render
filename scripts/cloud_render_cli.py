@@ -48,6 +48,7 @@ ap.add_argument("--disk", type=int, default=40)
 ap.add_argument("--series", default="20,30,40,50")
 ap.add_argument("--min-reliability", type=float, default=0.95)
 ap.add_argument("--min-inet-down", type=int, default=200)
+ap.add_argument("--min-inet-up", type=int, default=100)
 ap.add_argument("--retries", type=int, default=2)
 ap.add_argument("--image", default="ghcr.io/occultmc/blender-cloud-render:latest")
 args = ap.parse_args()
@@ -111,7 +112,7 @@ cfg = jobmod.JobConfig(
     min_vram_gb=args.min_vram, disk_gb=args.disk, max_dph=args.max_dph, min_reliability=args.min_reliability,
     min_inet_down=args.min_inet_down, auto_download=True, auto_destroy=True, max_retries=args.retries,
     pick_strategy=args.pick, min_gpus=args.min_gpus, max_gpus=args.max_gpus,
-    multi_gpu_mode=args.gpu_mode,
+    multi_gpu_mode=args.gpu_mode, min_inet_up=args.min_inet_up,
 )
 job = jobmod.CloudJob(cfg)
 job.start()
