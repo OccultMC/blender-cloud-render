@@ -417,7 +417,7 @@ class CloudJob:
         env = self._worker_env(w, frames)
         with self.lock:
             w.state = "creating"
-            w.offer = {k: offer.get(k) for k in ("id", "machine_id", "gpu_name", "num_gpus", "gpu_ram", "dph_total",
+            w.offer = {k: offer.get(k) for k in ("id", "machine_id", "host_id", "gpu_name", "num_gpus", "gpu_ram", "dph_total",
                                                   "driver_version", "geolocation", "reliability", "inet_down", "inet_up",
                                                   "cpu_ram", "cpu_cores_effective", "cpu_name", "disk_space")}
             w.mem = ""
